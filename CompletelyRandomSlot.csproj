@@ -37,4 +37,8 @@
 		<MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#1E1E2E" BaseSize="128,128" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<Compile Remove="DisplayAlertCompat.cs" />
+	</ItemGroup>
+
 </Project>
