@@ -1,6 +1,9 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.Maui;
 using Microsoft.Maui.ApplicationModel;
@@ -13,7 +16,7 @@ public class MainPage : ContentPage
 {
     private int currentStage = 3;   //桁数
     private int maxDigit = 9;       //通常は9(0〜9)、7当選時は7(0〜7)
-    private int minDigit = 1;
+    private int minDigit = 0;
     private int coins = 100;
     private int remainingSpins = -1;//残り回転数(-1は無制限)
 
@@ -22,8 +25,8 @@ public class MainPage : ContentPage
     private int previousNumber = -1; //前回の出目を記録
 
     //タップされるまで待つためのオブジェクト
-    private TaskCompletionSource<bool>? tapCompletionSource;
-
+    private TaskCompletionSource<bool> tapCompletionSource;
+    
     private readonly string[] LuckyNumbersStage3 = {
         "001", "007", "012","081",
         "100", "123",
@@ -50,7 +53,7 @@ public class MainPage : ContentPage
         };
     private readonly string[] LuckyNumbersStage5 = {
         "01234",
-        "10000", "12345",
+        "10000", "11037", "12345",
         "23456",
         "34567",
         "43210", "45678",
@@ -64,9 +67,10 @@ public class MainPage : ContentPage
     private readonly int[] SubLuckyNumbers1 = { 7 };
     private readonly int[] SubLuckyNumbers2 = { 17, 19, 39, 77 };
     private readonly int[] SubLuckyNumbers3 = { 123, 321, 777 };
-
+    
     private bool isChinChiroMode = false;
     private int chinchiroStartCoins = 0;
+    private int chinchiroPreviousStage = 3;
 
     private enum ChinChiroHand
     {
@@ -78,6 +82,83 @@ public class MainPage : ContentPage
         YakuNashi
     }
 
+    private bool isPokerMode = false;
+    private int pokerStartCoins = 0;
+    private int pokerPreviousStage = 3;
+    
+    private struct Card
+    {
+        public int Suit;
+        public int Rank;
+        
+        public Card(int suit, int rank)
+        {
+            Suit = suit;
+            Rank = rank;
+        }
+        
+        public override string ToString()
+        {
+            string[] suits = { "♠", "♥", "♦", "♣" };
+            string[] ranks = { "", "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"};
+            return $"{suits[Suit]}{ranks[Rank]}";
+        }
+    }
+
+    private enum PokerHand
+    {
+        RoyalStraightFlush,
+        StraightFlush,
+        FiveOfAkind,
+        FourOfAkind,
+        FullHouse,
+        Flush,
+        Straight,
+        ThreeOfAkind,
+        TwoPair,
+        OnePair,
+        NoPair
+    }
+    
+    private int circleStep = 0;
+    private bool isSuperRush = false;
+    private int superRushSpins = 0;
+    private int superRushMultiplier = 10;
+    
+    private struct ReachData
+    {
+        public string Text { get; set; }
+        public Color TextColor { get; set; }
+    }
+    
+    private readonly List<ReachData> BlueReachList = new()
+    {
+        new ReachData { Text = "📢 「何かが起こる予感……！」", TextColor = Colors.DeepSkyBlue},
+        new ReachData { Text = "📢 「気配を感じるぞ…！」", TextColor = Colors.DeepSkyBlue},
+        new ReachData { Text = "📢 「何かが、動き出した…？」", TextColor = Colors.DeepSkyBlue}
+    };
+    
+    private readonly List<ReachData> GreenReachList = new()
+    {
+        new ReachData { Text = "📢 「好機を、感じる…！」", TextColor = Colors.LimeGreen},
+        new ReachData { Text = "📢 「悪くない流れだ……いける」", TextColor = Colors.LimeGreen},
+        new ReachData { Text = "📢 「流れが来ている…！」", TextColor = Colors.LimeGreen}
+    };
+    
+    private readonly List<ReachData> RedReachList = new()
+    {
+        new ReachData { Text = "📢 「熱い！熱すぎる展開だ！！」", TextColor = Colors.Red},
+        new ReachData { Text = "📢 「止まるな…このまま突き抜けろ！！」", TextColor = Colors.Red},
+        new ReachData { Text = "📢 「ねじ込め！ 運命の一撃！！」", TextColor = Colors.Red}
+    };
+    
+    private readonly List<ReachData> GoldReachList = new()
+    {
+        new ReachData { Text = "📢 「この一撃に、すべてを懸けろ！！」", TextColor = Colors.Gold},
+        new ReachData { Text = "📢 「選ばれた者だけが見る景色だ……！！」", TextColor = Colors.Gold},
+        new ReachData { Text = "📢 「最高の瞬間が今、訪れる！！」", TextColor = Colors.Gold}
+    };
+
     private Label titleLabel;
     private Label coinLabel;
     private Label stageLabel;
@@ -86,6 +167,8 @@ public class MainPage : ContentPage
     private Label reachLabel;
     private Grid overlayGrid;
     private Label overlayLabel;
+    private Label miniReachLabel;
+    private Label countdownLabel;
     private Button spinButton;
 
     public MainPage()
@@ -114,7 +197,7 @@ public class MainPage : ContentPage
 
         stageLabel = new Label
         {
-            Text = "STAGE 1 : 1/100(1%)",
+            Text = "1/100(1%)",
             FontSize = 14,
             TextColor = Colors.LightGray,
             HorizontalOptions = LayoutOptions.Center,
@@ -171,7 +254,7 @@ public class MainPage : ContentPage
         overlayGrid = new Grid
         {
             IsVisible = false,
-            BackgroundColor = Colors.Transparent, //画面を隠す濃い背景
+            BackgroundColor = Color.FromRgba(0, 0, 0, 200), //画面を隠す濃い背景
             HorizontalOptions = LayoutOptions.Fill,
             VerticalOptions = LayoutOptions.Fill,
             InputTransparent = false //演出中にボタンなどを押さないようにガード
@@ -188,6 +271,30 @@ public class MainPage : ContentPage
             TranslationX = -1500,
         };
         overlayGrid.Children.Add(overlayLabel);
+        
+        //左上のミニリーチ表示
+        miniReachLabel = new Label
+        {
+            FontSize = 20,
+            FontAttributes = FontAttributes.Bold,
+            TextColor = Colors.Gold,
+            HorizontalOptions = LayoutOptions.Start,
+            VerticalOptions = LayoutOptions.Start,
+            Margin = new Thickness(20),
+        };
+        
+        //中央のカウントダウン用デカ文字
+        countdownLabel = new Label
+        {
+            FontSize = 45,
+            FontAttributes = FontAttributes.Bold,
+            TextColor = Colors.White,
+            HorizontalOptions = LayoutOptions.Center,
+            VerticalOptions = LayoutOptions.Center,
+        };
+        
+        overlayGrid.Children.Add(miniReachLabel);
+        overlayGrid.Children.Add(countdownLabel);
 
         var mainLayout = new VerticalStackLayout
         {
@@ -234,10 +341,9 @@ public class MainPage : ContentPage
         }
 
         string spinText = (remainingSpins < 0) ? "無制限" : $"{remainingSpins}回";
-        string rangeText = $"0~{maxDigit}";
         string probText = GetProbabilityText(currentStage, maxDigit);
 
-        stageLabel.Text = $"STAGE{currentStage - 2} : {probText} (範囲: {rangeText} / 残り: {spinText})";
+        stageLabel.Text = $"{probText} / 残り: {spinText}";
     }
 
     private async void OnSpinClicked(object sender, EventArgs e)
@@ -270,10 +376,64 @@ public class MainPage : ContentPage
                 {
                     resultMessage = $" TOTAL LOSE \n\n 【 {totalGain} Coin】\n\n YOU LOSE...";
                 }
-
+                
+                if (chinchiroPreviousStage == 3)
+                {
+                    currentStage = 4;
+                    remainingSpins = 100;
+                    UpdateDisplay(new int[] { 0, 0, 0, 0});
+                }
+                else if (chinchiroPreviousStage == 4)
+                {
+                    currentStage = 5;
+                    remainingSpins = 100;
+                    UpdateDisplay(new int[] { 0, 0, 0, 0, 0});
+                }
+                else //5桁ステージで当たっていた場合
+                {
+                    ResetToStage1();
+                }
                 UpdateHeaderUI();
-                await DisplayAlert(title, resultMessage, "通常モードへ戻る");
+                
+                isSpinning = false;
+                spinButton.IsEnabled = true;
+                return;
+            }
+            if (isPokerMode)
+            {
+                isPokerMode = false;
+                minDigit = 0;
+                maxDigit = 9;
 
+                int totalGain = coins - pokerStartCoins;
+                string title = "🃏 POKER BONUS RESULT 🃏";
+                string resultMessage = (totalGain >= 0)
+                    ? $"TOTAL WIN \n\n 【 +{totalGain} Coin】"
+                    : $"TOTAL LOSE \n\n 【 {totalGain} Coin】";
+                UpdateHeaderUI();
+                await DisplayAlertAsync(title, resultMessage, "ボーナス終了！");
+                
+                //ポーカー前のステージに基づいて次のステージへ昇格
+                if (pokerPreviousStage == 3)
+                {
+                    await DisplayAlertAsync("ステージ突破！", "ポーカーボーナス達成！\n次は4桁ステージ（100回制限）です！", "次へ");
+                    currentStage = 4;
+                    remainingSpins = 100;
+                    UpdateDisplay(new int[] { 0, 0, 0, 0});
+                }
+                else if (pokerPreviousStage == 4)
+                {
+                    currentStage = 5;
+                    remainingSpins = 100;
+                    UpdateDisplay(new int[] { 0, 0, 0, 0, 0});
+                }
+                else //5桁ステージで当たっていた場合
+                {
+                    await DisplayAlertAsync("全制覇！", "5桁ポーカーボーナス達成！\n最初の3桁ステージに戻ります！", "次へ");
+                    ResetToStage1();
+                }
+                
+                UpdateHeaderUI();
                 isSpinning = false;
                 spinButton.IsEnabled = true;
                 return;
@@ -284,18 +444,144 @@ public class MainPage : ContentPage
 
         isSpinning = true;
         spinButton.IsEnabled = false;
-
-        if (remainingSpins > 0)
+        
+        if (isSuperRush)
         {
-            remainingSpins--;
+            superRushSpins--;
+        }
+        else
+        {
+            if (remainingSpins > 0) remainingSpins--;
+            coins--;
         }
 
-        coins--;
-
         UpdateHeaderUI();
+        
+        int nextStep = circleStep;
+        
+        bool isOneShot = (random.Next(1500) < 1); 
+        if (isOneShot)
+        {
+            nextStep = currentStage;
+        }
+        else
+        {
+            int roll = random.Next(100);
+            
+            double progress = (double)circleStep / 5.0;
+            int successRate = Math.Max(5, (int)(25.0 * Math.Cos(progress * (Math.PI / 2.0))));
+            
+            if (roll < successRate)
+            {
+                nextStep = circleStep + 1; //成功
+            }
+            else if (circleStep < currentStage)
+            {
+                nextStep = 0; //失敗でリセット
+            }
+        }
+        
+        // 最後の◯（全マル）がかかっているかのフラグ
+        bool isFinalCircleChallenge = (circleStep == currentStage - 1 && nextStep == currentStage);
+        
+        // 回転中の画面表示用ステップ（全マル達成の時は最後のリールが止まるまで隠しておく）
+        int displayStep = isFinalCircleChallenge ? (currentStage - 1) : nextStep;
+        
+        if (isPokerMode)
+        {
+            Card[] cards = new Card[5];
+            
+            for (int stoppedReels = 0; stoppedReels < 5; stoppedReels++)
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    for (int d = stoppedReels; d < 5; d++)
+                    {
+                        cards[d] = GetRandomCard();
+                    }
+                    UpdatePokerDisplay(cards);
+                    await Task.Delay(50);
+                }
+            }
+            var pokerHand = EvaluatePoker(cards);
+            int multiplier = pokerPreviousStage - 2;
+            
+            switch (pokerHand)
+            {
+                case PokerHand.RoyalStraightFlush:
+                    int rfCoin = 10000 * multiplier;
+                    coins += rfCoin;
+                    statusLabel.Text = $"👑 ロイヤルフラッシュ!! (+{rfCoin} Coin)";
+                    await PlayZoromeAnimationAsync();
+                    break;
+                case PokerHand.StraightFlush:
+                    int sfCoin = 5000 * multiplier;
+                    coins += sfCoin;
+                    statusLabel.Text = $"⚡ ストレートフラッシュ!! (+{sfCoin} Coin)";
+                    await PlayZoromeAnimationAsync();
+                    break;
+                case PokerHand.FiveOfAkind:
+                    int fiveCoin = 3000 * multiplier;
+                    coins += fiveCoin;
+                    statusLabel.Text = $"5カード!! (+{fiveCoin} Coin)";
+                    statusLabel.TextColor = Colors.Gold;
+                    await PlayZoromeAnimationAsync();
+                    break;
+                case PokerHand.FourOfAkind:
+                    int fourCoin = 1500 * multiplier;
+                    coins += fourCoin;
+                    statusLabel.Text = $"4カード! (+{fourCoin} Coin)";
+                    statusLabel.TextColor = Colors.Goldenrod;
+                    break;
+                case PokerHand.FullHouse:
+                    int fhCoin = 800 * multiplier;
+                    coins += fhCoin;
+                    statusLabel.Text = $"フルハウス! (+{fhCoin} Coin)";
+                    statusLabel.TextColor = Colors.Lime;
+                    break;
+                case PokerHand.Flush:
+                    int flCoin = 600 * multiplier;
+                    coins += flCoin;
+                    statusLabel.Text = $"フラッシュ! (+{flCoin} Coin)";
+                    break;
+                case PokerHand.Straight:
+                    int stCoin = 500 * multiplier;
+                    coins += stCoin;
+                    statusLabel.Text = $"ストレート! (+{stCoin} Coin)";
+                    statusLabel.TextColor = Colors.Cyan;
+                    break;
+                case PokerHand.ThreeOfAkind:
+                    int threeCoin = 300 * multiplier;
+                    coins += threeCoin;
+                    statusLabel.Text = $"3カード (+{threeCoin} Coin)";
+                    statusLabel.TextColor = Colors.LightGreen;
+                    break;
+                case PokerHand.TwoPair:
+                    int tpCoin = 100 * multiplier;
+                    coins += tpCoin;
+                    statusLabel.Text = $"ツーペア (+{tpCoin} Coin)";
+                    statusLabel.TextColor = Colors.SkyBlue;
+                    break;
+                case PokerHand.OnePair:
+                    int opCoin = 30 * multiplier;
+                    coins += opCoin;
+                    statusLabel.Text = $"ワンペア (+{opCoin} Coin)";
+                    statusLabel.TextColor = Colors.White;
+                    break;
+                case PokerHand.NoPair:
+                    statusLabel.Text = "ノーペア... ハズレ！";
+                    statusLabel.TextColor = Colors.Salmon;
+                    break;
+            }
+            
+            UpdateHeaderUI();
+            isSpinning = false;
+            spinButton.IsEnabled = true;
+            return;
+        }
 
-        statusLabel.Text = "抽選中…";
-        statusLabel.TextColor = Colors.Yellow;
+        statusLabel.Text = isSuperRush ? $"🔥 SUPER RUSH中! (倍率:{superRushMultiplier}倍)" : "抽選中…";
+        statusLabel.TextColor = isSuperRush ? Colors.Gold : Colors.Yellow;
 
         //0.1%の確率でステージアップ！
         bool isPremiumNotice = (random.Next(1000) == 0);
@@ -332,23 +618,34 @@ public class MainPage : ContentPage
             bool isReach = false;
             if (stoppedReels == currentStage - 1)
             {
-                isReach = true;
+                bool isNumberReach = true;
                 int firstDigit = result[0];
                 for (int k = 1; k < currentStage - 1; k++)
                 {
                     if (result[k] != firstDigit)
                     {
-                        isReach = false;
+                        isNumberReach = false;
                         break;
                     }
                 }
+                // 数字が揃いそうな時だけでなく、最後の◯がかかっている時も強制リーチ！
+                isReach = isNumberReach || isFinalCircleChallenge;
             }
 
             //リーチ成立後のカットイン演出
             if (isReach)
             {
-                statusLabel.Text = "リーチ！";
-                statusLabel.TextColor = Colors.Red;
+                // 当たり確定予告（黄色予告・プレミアム予告）が出ているか確認
+                bool isWinning = isYellowNotice || isPremiumNotice;
+                
+                // 期待度（色・セリフ）を即座に判定
+                ReachData reachEffect = GetReachEffect(isFinalCircleChallenge, isWinning);
+                
+                // 画面のステータス表示を更新
+                statusLabel.Text = reachEffect.Text;
+                statusLabel.TextColor = reachEffect.TextColor;
+                
+                //カットインアニメーション開始
                 Task reachTask = PlayReachAnimationAsync();
 
                 //アニメーションが終わるまでリールを回転させ続ける
@@ -358,14 +655,44 @@ public class MainPage : ContentPage
                     {
                         result[d] = random.Next(minDigit, maxDigit + 1);
                     }
-                    UpdateDisplay(result);
+                    UpdateDisplayWithCircles(result, displayStep);
                     await Task.Delay(50);
+                }
+                
+                if (reachEffect.TextColor == Colors.Red || reachEffect.TextColor == Colors.Gold)
+                {
+                    // 赤または金リーチのとき、一定確率（例：40%）でこの激アツ演出に発展！
+                    if (random.Next(100) < 40)
+                    {
+                        int targetDigit = result[0]; // 揃えようとしているテンパイ数字
+                        
+                        // 今回の抽選で本当に当たるかどうか（黄色予告・プレミアム、または自力当選か）
+                        bool isWin = isWinning || (random.Next(100) < 15);
+                        
+                        // 特殊演出を実行して、結果（true=当たり, false=ハズレ）を受け取る
+                        bool actualWin = await PlaySpecialCountdownReachAsync(targetDigit, isWin);
+                        
+                        // 演出の結果に合わせて、最後のリールの数字を強制的に決定する
+                        if (actualWin)
+                        {
+                            result[currentStage - 1] = targetDigit; // 見事揃う！
+                        }
+                        else
+                        {
+                            // 外れの場合：テンパイ数字の次の数字（例: 1なら2）にしてハズス
+                            result[currentStage - 1] = (targetDigit >= maxDigit) ? minDigit : targetDigit + 1;
+                        }
+                        
+                        // 画面を最終結果に更新して、通常の「最後の通常回転ループ」をスキップして判定へ飛ぶ！
+                        UpdateDisplayWithCircles(result, displayStep);
+                        break;
+                    }
                 }
             }
 
             //リーチの回転数にタメを作る
-            int spinCount = isReach ? 20 : 8; //8回→25回
-            int spinDelay = isReach ? 100 : 50; //50ms→80ms
+            int spinCount = isReach ? 25 : 13; //8回→25回
+            int spinDelay = isReach ? 150 : 50; //50ms→80ms
 
             //1つのリールが止まるまでの回転時間(8回 × 50ms = 0.4秒回転)
             for (int i = 0; i < spinCount; i++)
@@ -375,7 +702,7 @@ public class MainPage : ContentPage
                 {
                     result[d] = random.Next(minDigit, maxDigit + 1);
                 }
-                UpdateDisplay(result);
+                UpdateDisplayWithCircles(result, displayStep);
                 await Task.Delay(spinDelay);
             }
 
@@ -383,13 +710,26 @@ public class MainPage : ContentPage
             if (isYellowNotice)
             {
                 result[stoppedReels] = forcedLuckyNum[stoppedReels] - '0';
-                UpdateDisplay(result);
+                UpdateDisplayWithCircles(result, displayStep);
             }
             else if (isPremiumNotice)
             {
                 result[stoppedReels] = forcedZoromeDigit;
-                UpdateDisplay(result);
+                UpdateDisplayWithCircles(result, displayStep);
             }
+        }
+        
+        circleStep = nextStep;
+        
+        // 最後の◯（全マル）達成時の決め演出！
+        if (isFinalCircleChallenge)
+        {
+            // 最後の◯を画面に反映！
+            UpdateDisplayWithCircles(result, circleStep);
+            statusLabel.Text = "🎉 全 マル 達 成 ！！ 🎉";
+            statusLabel.TextColor = Colors.Gold;
+            
+            await Task.Delay(600);
         }
 
         bool isZorome = result.All(x => x == result[0]);
@@ -439,97 +779,157 @@ public class MainPage : ContentPage
                     break;
             }
         }
-        //ゾロ目判定
-        else if (isZorome)
+        //SUPER RUSH 中の配当処理
+        else if (isSuperRush)
         {
-            int hitDigit = result[0];
-            int rewardCoin = (hitDigit + 1) * 100 * (currentStage - 2);
-            coins += rewardCoin;
-
-            statusLabel.Text = $"大当たり！！({hitDigit}のゾロ目！ +{rewardCoin} Coin)";
-            statusLabel.TextColor = Colors.Lime;
-
-            await PlayZoromeAnimationAsync();
-            await Task.Delay(3000);
-
-            //当たった時点での正確な確率テキストを取得
-            string currentProbText = GetProbabilityText(currentStage, maxDigit);
-
-            if (hitDigit == 7)
+            long gainedCoin = (long)numberVal * superRushMultiplier;
+            coins += (int)Math.Min(gainedCoin, int.MaxValue);
+            statusLabel.Text = $"🔥 RUSH獲得! {numberVal} * {superRushMultiplier}倍 = +{gainedCoin} Coin";
+            statusLabel.TextColor = Colors.Gold;
+            
+            //RUSH中に全マル（①②③）達成で上乗せ！
+            if (circleStep == currentStage)
             {
-                maxDigit = 7;
+                superRushSpins += 1;
+                superRushMultiplier += 10;
+                circleStep = 0;
+                await PlayZoromeAnimationAsync();
+                await DisplayAlertAsync("🎉 上乗せ達成！", "+1G上乗せ & 倍率+10倍アップ！", "NEXT");
             }
-            else if (hitDigit == 6)
+            
+            if (superRushSpins <= 0)
             {
-                minDigit = 1;
-                maxDigit = 6;
-                remainingSpins = 10;
-                isChinChiroMode = true;
-                chinchiroStartCoins = coins;
-
-                await DisplayAlert("チンチロモード突入！",
-                "出目が1〜6限定&10回フリースピン！\n" +
-                "・ピンゾロ(111):5倍配当\n" +
-                "・ゾロ目:3倍配当\n" +
-                "・シゴロ:2倍配当\n" +
-                "・通常の目:賭けコイン返還\n" +
-                "・役無し:賭けたコイン没収\n" +
-                "・ヒフミ:2倍没収\n", "勝負開始！");
+                isSuperRush = false;
+                superRushMultiplier = 10;
+                await DisplayAlertAsync("SUPER RUSH 終了", "通常モードに戻ります。", "OK");
             }
-            else
-            {
-                minDigit = 0;
-                maxDigit = 9;
-                isChinChiroMode = false;
-            }
-
-            if (hitDigit != 6)
-            {
-                if (currentStage == 3)
-                {
-                    await DisplayAlert("突破！", $"{currentProbText}を達成しました" + (maxDigit == 7 ? "\n★7ボーナス:次回は0〜7のみ出現！" : ""), "次のステージへ移行します");
-                    currentStage = 4;
-                    remainingSpins = 100;
-                    UpdateDisplay(new int[] { 0, 0, 0, 0 });
-                }
-                else if (currentStage == 4)
-                {
-                    await DisplayAlert("突破！", $"{currentProbText}を達成しました" + (maxDigit == 7 ? "\n★7ボーナス:次回は0〜7のみ出現！" : ""), "次のステージへ移行します");
-                    currentStage = 5;
-                    remainingSpins = 100;
-                    UpdateDisplay(new int[] { 0, 0, 0, 0, 0 });
-                }
-                else
-                {
-                    await DisplayAlert("全制覇！", $"{currentProbText}を達成。見事だ。", "次の挑戦を待っている");
-                    ResetToStage1();
-                }
-            }
-            UpdateHeaderUI();
-        }
-        //ラッキーナンバーの処理(ラッキースロット突入)
-        else if (isLucky)
-        {
-
-
-            statusLabel.Text = $"ラッキーナンバー達成({numberVal})!　サブスロット突入";
-            statusLabel.TextColor = Colors.Cyan;
-            UpdateHeaderUI();
-
-            await WaitForTapAsync();
-
-            //サブスロット処理実行
-            await ProcessSubSlotAsync(result);
         }
         else
         {
-            statusLabel.Text = "残念…ハズレ！";
-            statusLabel.TextColor = Colors.Salmon;
-
-            if (remainingSpins == 0)
+            
+            if (circleStep == currentStage)
             {
-                await Task.Delay(5000);
-                await DemoteStageAsync();
+                isSuperRush = true;
+                superRushSpins = 1;
+                superRushMultiplier = 10;
+                circleStep = 0;
+                
+                await PlayZoromeAnimationAsync();
+                await DisplayAlertAsync("⚡ SUPER RUSH 突入！ ⚡", 
+                "全マル達成！10スピンの爆発モード突入！\n" +
+                "・毎スピンの配当が【10倍】！\n" +
+                "・RUSH中に再び全マルで【+1G上乗せ & 倍率+10倍】！", "爆裂スタート！");
+            }
+        
+            //ゾロ目判定
+            else if (isZorome)
+            {
+                int hitDigit = result[0];
+                int rewardCoin = (hitDigit + 1) * 100 * (currentStage - 2);
+                coins += rewardCoin;
+
+                statusLabel.Text = $"大当たり！！({hitDigit}のゾロ目！ +{rewardCoin} Coin)";
+                statusLabel.TextColor = Colors.Lime;
+
+                await PlayZoromeAnimationAsync();
+                await Task.Delay(3000);
+
+                //当たった時点での正確な確率テキストを取得
+                string currentProbText = GetProbabilityText(currentStage, maxDigit);
+
+                if (hitDigit == 7)
+                {
+                    maxDigit = 7;
+                }
+                else if (hitDigit == 6)
+                {
+                    chinchiroPreviousStage = currentStage;
+                    minDigit = 1;
+                    maxDigit = 6;
+                    remainingSpins = 10;
+                    isChinChiroMode = true;
+                    chinchiroStartCoins = coins;
+                    UpdateDisplay(new int[] { 0, 0, 0});
+
+                    await DisplayAlertAsync("チンチロモード突入！",
+                    "出目が1〜6限定&10回フリースピン！\n" +
+                    "・ピンゾロ(111):5倍配当\n" +
+                    "・ゾロ目:3倍配当\n" +
+                    "・シゴロ:2倍配当\n" +
+                    "・通常の目:賭けコイン返還\n" +
+                    "・役無し:賭けたコイン没収\n" +
+                    "・ヒフミ:2倍没収\n", "勝負開始！");
+                }
+                else if (hitDigit == 5)
+                {
+                    pokerPreviousStage = currentStage;
+                    minDigit = 1;
+                    maxDigit = 9;
+                    currentStage = 5;
+                    remainingSpins = 10;
+                    isPokerMode = true;
+                    pokerStartCoins = coins;
+                    UpdateDisplay(new int[] { 0, 0, 0, 0, 0});
+                    await DisplayAlertAsync("🃏 ポーカーモード突入！",
+                        "出目の数字で役を作る5回限定ポーカー！\n" +
+                        "・5カード / 4カード: 超大爆発\n" +
+                        "・フルハウス / ストレート / 3カード: 高配当\n" +
+                        "・ツーペア / ワンペア: 小役獲得", "勝負開始！");
+                }
+                else
+                {
+                    minDigit = 0;
+                    maxDigit = 9;
+                    isChinChiroMode = false;
+                }
+
+                if (hitDigit != 6 && hitDigit != 5)
+                {
+                    if (currentStage == 3)
+                    {
+                        await DisplayAlertAsync("突破！", $"{currentProbText}を達成しました" + (maxDigit == 7 ? "\n★7ボーナス:次回は0〜7のみ出現！" : ""), "次のステージへ移行します");
+                        currentStage = 4;
+                        remainingSpins = 100;
+                        UpdateDisplay(new int[] { 0, 0, 0, 0 });
+                    }
+                    else if (currentStage == 4)
+                    {
+                        await DisplayAlertAsync("突破！", $"{currentProbText}を達成しました" + (maxDigit == 7 ? "\n★7ボーナス:次回は0〜7のみ出現！" : ""), "次のステージへ移行します");
+                        currentStage = 5;
+                        remainingSpins = 100;
+                        UpdateDisplay(new int[] { 0, 0, 0, 0, 0 });
+                    }
+                    else
+                    {
+                        await DisplayAlertAsync("全制覇！", $"{currentProbText}を達成。見事だ。", "次の挑戦を待っている");
+                        ResetToStage1();
+                    }
+                }
+                UpdateHeaderUI();
+            }
+            //ラッキーナンバーの処理(ラッキースロット突入)
+            else if (isLucky)
+            {
+
+                statusLabel.Text = $"ラッキーナンバー達成({numberVal})!　サブスロット突入";
+                statusLabel.TextColor = Colors.Cyan;
+                UpdateHeaderUI();
+
+                await WaitForTapAsync();
+
+                //サブスロット処理実行
+                await ProcessSubSlotAsync(result);
+            }
+            else
+            {
+                statusLabel.Text = "残念…ハズレ！";
+                statusLabel.TextColor = Colors.Salmon;
+
+                if (remainingSpins == 0)
+                {
+                    await Task.Delay(5000);
+                    await DemoteStageAsync();
+                }
             }
         }
 
@@ -552,8 +952,8 @@ public class MainPage : ContentPage
                 statusLabel.TextColor = Colors.Goldenrod;
 
                 //ド派手に拡大演出
-                await displayLabel.ScaleTo(2.0, 300);
-                await displayLabel.ScaleTo(1.0, 300);
+                await displayLabel.ScaleToAsync(2.0, 300);
+                await displayLabel.ScaleToAsync(1.0, 300);
 
                 await Task.Delay(5000);
             }
@@ -564,9 +964,10 @@ public class MainPage : ContentPage
         UpdateHeaderUI();
         isSpinning = false;
         spinButton.IsEnabled = true;
+        return;
     }
 
-    private void OnScreenTapped(object? sender, EventArgs e)
+    private void OnScreenTapped(object sender, EventArgs e)
     {
         //タップ待ち状態なら待ちを解除して次へ進める
         if (tapCompletionSource != null && !tapCompletionSource.Task.IsCompleted)
@@ -598,7 +999,7 @@ public class MainPage : ContentPage
             maxDigit = 9;
             UpdateDisplay(new int[] { 0, 0, 0, 0 });
             UpdateHeaderUI();
-            await DisplayAlert("↓Down...↓", "回転数が0になったためステージが1段落ちます", "次へ");
+            await DisplayAlertAsync("↓Down...↓", "回転数が0になったためステージが1段落ちます", "次へ");
         }
         else if (currentStage == 4)
         {
@@ -608,7 +1009,7 @@ public class MainPage : ContentPage
             maxDigit = 9;
             UpdateDisplay(new int[] { 0, 0, 0 });
             UpdateHeaderUI();
-            await DisplayAlert("↓Down...↓", "回転数が0になったため最初のステージに移行します", "Re:TrymenT");
+            await DisplayAlertAsync("↓Down...↓", "回転数が0になったため最初のステージに移行します", "Re:TrymenT");
 
         }
     }
@@ -620,13 +1021,13 @@ public class MainPage : ContentPage
         reachLabel.TranslationX = -400;
 
         //左外から画面中央へスライドイン
-        await reachLabel.TranslateTo(0, 0, 300, Easing.CubicOut);
+        await reachLabel.TranslateToAsync(0, 0, 300, Easing.CubicOut);
 
         //画面中央へ一時停止
         await Task.Delay(500);
 
         //右外へスライドアウト
-        await reachLabel.TranslateTo(400, 0, 300, Easing.CubicIn);
+        await reachLabel.TranslateToAsync(400, 0, 300, Easing.CubicIn);
 
         reachLabel.IsVisible = false;
         reachLabel.TranslationX = -400;
@@ -676,13 +1077,77 @@ public class MainPage : ContentPage
         //役無し
         return ChinChiroHand.YakuNashi;
     }
+    
+    private PokerHand EvaluatePoker(Card[] cards)
+    {
+        bool isFlush = cards.All(c => c.Suit == cards[0].Suit);
+        
+        var rankGroups = cards.GroupBy(c => c.Rank)
+                              .Select(g => g.Count())
+                              .OrderByDescending(c => c)
+                              .ToList();
+                              
+        var sortedRanks = cards.Select(c => c.Rank).OrderBy(r => r).ToArray();
+        
+        // ストレート判定（連番かチェック）
+        bool isNormalStraight = true;
+        for (int i = 0; i < sortedRanks.Length - 1; i++)
+        {
+            if (sortedRanks[i + 1] - sortedRanks[i] != 1)
+            {
+                isNormalStraight = false;
+                break;
+            }
+        }
+        
+        bool isRoyalStraightFlush = sortedRanks.SequenceEqual(new[] { 1, 10, 11, 12, 13 });
+        bool isStraight = isNormalStraight || isRoyalStraightFlush;
+        
+        if (isFlush && isRoyalStraightFlush) return PokerHand.RoyalStraightFlush;
+        if (isFlush && isStraight) return PokerHand.StraightFlush;
+        if (rankGroups[0] == 5) return PokerHand.FiveOfAkind;
+        if (rankGroups[0] == 4) return PokerHand.FourOfAkind;
+        if (rankGroups[0] == 3 && rankGroups.Count > 1 && rankGroups[1] == 2) return PokerHand.FullHouse;
+        if (isFlush) return PokerHand.Flush;
+        if (isStraight) return PokerHand.Straight;
+        if (rankGroups[0] == 3) return PokerHand.ThreeOfAkind;
+        if (rankGroups[0] == 2 && rankGroups.Count > 1 && rankGroups[1] == 2) return PokerHand.TwoPair;
+        if (rankGroups[0] == 2) return PokerHand.OnePair;
+        
+        return PokerHand.NoPair;
+    }
+    
+    private ReachData GetReachEffect(bool isFinalCircle, bool isWinning)
+    {
+        if (isFinalCircle)
+        {
+            int r = random.Next(100);
+            return (r < 70)
+                ? GoldReachList[random.Next(GoldReachList.Count)]
+                : RedReachList[random.Next(RedReachList.Count)];
+        }
+        
+        int roll = random.Next(100);
+        if (isWinning)
+        {
+            if (roll < 30) return GoldReachList[random.Next(GoldReachList.Count)];
+            if (roll < 90) return RedReachList[random.Next(RedReachList.Count)];
+            return GreenReachList[random.Next(GreenReachList.Count)];
+        }
+        else
+        {
+            if (roll < 60) return BlueReachList[random.Next(BlueReachList.Count)];
+            if (roll < 90) return GreenReachList[random.Next(GreenReachList.Count)];
+            return RedReachList[random.Next(RedReachList.Count)];
+        }
+    }
 
     private async Task PlayZoromeAnimationAsync()
     {
         Color originalColor = displayLabel.TextColor;
 
         //数字を大きくする
-        await displayLabel.ScaleTo(1.6, 200, Easing.CubicOut);
+        await displayLabel.ScaleToAsync(1.6, 200, Easing.CubicOut);
 
         //画面シェイク&虹色フラッシュ
         Color[] rainbowColors = new Color[]
@@ -697,14 +1162,14 @@ public class MainPage : ContentPage
 
             //画面全体を左右に揺らす
             double offsetX = (i % 2 == 0) ? 12 : -12;
-            await Content.TranslateTo(offsetX, 0, 40);
+            await Content.TranslateToAsync(offsetX, 0, 40);
         }
 
         //画面位置を中央に戻す
-        await Content.TranslateTo(0, 0, 50);
+        await Content.TranslateToAsync(0, 0, 50);
 
         //数字が跳ねながら元の位置に戻る
-        await displayLabel.ScaleTo(1.0, 400, Easing.BounceOut);
+        await displayLabel.ScaleToAsync(1.0, 400, Easing.BounceOut);
 
         //文字の色を元に戻す
         displayLabel.TextColor = originalColor;
@@ -754,7 +1219,7 @@ public class MainPage : ContentPage
         });
 
         //3.5秒かけて画面左から右に流れる
-        await overlayLabel.TranslateTo(1500, 0, 3500, Easing.Linear);
+        await overlayLabel.TranslateToAsync(1500, 0, 3500, Easing.Linear);
 
         //シャッフル終了
         isStreaming = false;
@@ -793,8 +1258,6 @@ public class MainPage : ContentPage
                 }
             }
 
-
-
             int subVal = ConvertArrayToNumber(subResult);
             bool subLucky = IsSubLuckyNumber(subVal, subLanes);
 
@@ -826,7 +1289,77 @@ public class MainPage : ContentPage
 
         UpdateDisplay(mainResult);
     }
-
+    
+    private async Task<bool> PlaySpecialCountdownReachAsync(int targetDigit, bool isWin)
+    {
+        // メイン画面を半透明にして演出へ
+        await Content.FadeToAsync(0.3, 300);
+        
+        miniReachLabel.Text = $"[ {targetDigit} | {targetDigit} | ? ]";
+        overlayGrid.Opacity = 1;
+        overlayGrid.IsVisible = true;
+        
+        int nextDigit = (targetDigit == 9) ? 0 : targetDigit + 1;
+        
+        //9から順に上にポイポイ投げる演出
+        for (int num = 9; num > nextDigit; num--)
+        {
+            countdownLabel.Text = num.ToString();
+            countdownLabel.Scale = 1.0;
+            countdownLabel.TranslationY = 0;
+            countdownLabel.Opacity = 1;
+            countdownLabel.TextColor = Colors.White;
+            
+            await Task.Delay(150);
+            // 上に飛んで消える
+            await Task.WhenAll(
+                countdownLabel.TranslateToAsync(0, -250, 200, Easing.CubicIn),
+                countdownLabel.FadeToAsync(0, 200)
+            );
+        }
+        
+        //「2（テンパイの隣）」が出現してスローモーション＆溜め！
+        countdownLabel.Text = nextDigit.ToString();
+        countdownLabel.TranslationY = 0;
+        countdownLabel.Opacity = 1;
+        countdownLabel.TextColor = Colors.Red;
+        
+        //2.5秒かけてじわじわ巨大化
+        await Task.WhenAll(
+            countdownLabel.ScaleToAsync(1.8, 2500, Easing.SinOut),
+            countdownLabel.RelRotateToAsync(10, 2500)
+        );
+        
+        //当たり外れの分岐
+        if (isWin)
+        {
+            // ★ 当たり！一瞬で「1」にバチコーン切り替わって虹色演出へ
+            countdownLabel.Rotation = 0;
+            countdownLabel.Scale = 2.5;
+            countdownLabel.Text = targetDigit.ToString();
+            countdownLabel.TextColor = Colors.Gold;
+            
+            await countdownLabel.ScaleToAsync(1.2, 400, Easing.BounceOut);
+            await Task.Delay(800);
+            
+            overlayGrid.IsVisible = false;
+            await Content.FadeToAsync(1.0, 300);
+            return true;
+        }
+        else
+        {
+            // ★ ハズレ… ガックリ暗転
+            countdownLabel.TextColor = Colors.Gray;
+            await Task.Delay(600);
+            
+            await overlayGrid.FadeToAsync(0, 500);
+            overlayGrid.IsVisible = false;
+            
+            await Content.FadeToAsync(1.0, 300);
+            return false;
+        }
+    }
+    
     private bool IsMainLuckyNumber(int[] result, int stage)
     {
         string resultStr = string.Join("", result);
@@ -891,6 +1424,16 @@ public class MainPage : ContentPage
         }
         return "";
     }
+    
+    private string ToCircleString(int digit)
+    {
+        return digit switch
+        {
+            0 => "⓪", 1 => "①", 2 => "②", 3 => "③", 4 => "④",
+            5 => "⑤", 6 => "⑥", 7 => "⑦", 8 => "⑧", 9 => "⑨",
+            _ => digit.ToString()
+        };
+    }
 
     private int ConvertArrayToNumber(int[] arr)
     {
@@ -915,5 +1458,36 @@ public class MainPage : ContentPage
     private void UpdateDisplay(int[] digits)
     {
         displayLabel.Text = "[ " + string.Join(" | ", digits) + " ]";
+    }
+    
+    private void UpdatePokerDisplay(Card[] cards)
+    {
+        displayLabel.Text = "[ " + string.Join(" | ", cards.Select( c => c.ToString())) + " ]";
+    }
+    
+    private void UpdateDisplayWithCircles(int[] digits, int step)
+    {
+        string[] items = new string[digits.Length];
+        for (int i = 0; i < digits.Length; i++)
+        {
+            //達成しているステップ位置までは丸数字、それ以降は通常の数字
+            if (i < step)
+            {
+                items[i] = ToCircleString(digits[i]);
+            }
+            else
+            {
+                items[i] = digits[i].ToString();
+            }
+        }
+        displayLabel.Text = "[ " + string.Join(" | ", items) + " ]";
+    }
+    
+    private Card GetRandomCard()
+    {
+        int suit = random.Next(0, 4);
+        int rank = random.Next(1, 14);
+        
+        return new Card(suit, rank);
     }
 }
