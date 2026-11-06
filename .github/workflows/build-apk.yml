@@ -20,7 +20,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Install MAUI Android workload
-        run: dotnet workload install maui-android --version 10.0.0
+        run: dotnet workload install maui-android
 
       - name: Build APK (Release)
         run: dotnet publish CompletelyRandomSlot.csproj -f net10.0-android -c Release -o artifacts
